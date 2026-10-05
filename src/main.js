@@ -1,12 +1,15 @@
 import 'leaflet/dist/leaflet.css';
+import 'leaflet-draw/dist/leaflet.draw.css';
 import './viewer.css';
 import L from 'leaflet';
 import proj4 from 'proj4';
-import { createIcons, Menu, Mountain, Crop, Download, RefreshCw, X, CodeXml, ExternalLink, Crosshair } from 'lucide';
+import { createIcons, Menu, Mountain, Crop, SquareDashed, Download, RefreshCw, X, CodeXml, ExternalLink, Crosshair } from 'lucide';
 import { interpolateViridis, interpolateMagma, interpolateYlGn, interpolateRdBu, interpolateRainbow, interpolateTurbo } from 'd3-scale-chromatic';
 import { AREAS, BASE_URL, exportPreview, LAYERS, validateBounds } from './raster.js';
 
 const byId = (id) => document.getElementById(id);
+globalThis.L = L;
+await import('leaflet-draw');
 document.querySelector('#app').innerHTML = `
   <header class="app-header">
     <button id="menu" class="icon-button mobile-only" title="Layers and settings" aria-label="Layers and settings" aria-expanded="false"><i data-lucide="menu"></i></button>
@@ -40,7 +43,8 @@ document.querySelector('#app').innerHTML = `
     </aside>
     <main>
       <div class="map-toolbar"><div class="view-heading"><h2 id="view-title">Canopy height</h2><span id="view-unit">m</span></div>
-        <div class="map-actions"><button id="load" class="text-button primary" title="Read raster for the visible map extent"><i data-lucide="crop"></i><span>Load extent</span></button>
+        <div class="map-actions"><button id="draw-area" class="icon-button" title="Draw area" aria-label="Draw area" aria-pressed="false"><i data-lucide="square-dashed"></i></button>
+          <button id="load" class="text-button primary" title="Read raster for the visible map extent"><i data-lucide="crop"></i><span>Load extent</span></button>
           <button id="reset" class="icon-button" title="Reset to selected area" aria-label="Reset to selected area"><i data-lucide="refresh-cw"></i></button>
           <button id="download" class="icon-button" title="Download resampled preview GeoTIFF" aria-label="Download resampled preview GeoTIFF" disabled><i data-lucide="download"></i></button>
         </div>
@@ -55,15 +59,20 @@ document.querySelector('#app').innerHTML = `
   </div>
   <dialog id="custom-dialog"><form id="custom-form"><h2>Geographic bounds</h2><div class="bounds-grid">${[['west', 'West longitude', -122.30], ['south', 'South latitude', 37.00], ['east', 'East longitude', -121.85], ['north', 'North latitude', 37.35]].map(([id, label, value]) => `<div><label for="${id}">${label}</label><input id="${id}" name="${id}" type="number" step="any" value="${value}" required></div>`).join('')}</div><p id="bounds-error" role="alert"></p><div class="dialog-actions"><button id="custom-cancel" type="button" class="text-button">Cancel</button><button class="text-button primary" type="submit">Load area</button></div></form></dialog>
 `;
-createIcons({ icons: { Menu, Mountain, Crop, Download, RefreshCw, X, CodeXml, ExternalLink, Crosshair } });
+createIcons({ icons: { Menu, Mountain, Crop, SquareDashed, Download, RefreshCw, X, CodeXml, ExternalLink, Crosshair } });
 
-const map = L.map('map', { minZoom: 5, maxZoom: 18, preferCanvas: true, zoomControl: true });
+const map = L.map('map', { minZoom: 5, maxZoom: 18, preferCanvas: true, zoomControl: true, drawControlTooltips: false });
+const rectangleDraw = new L.Draw.Rectangle(map, {
+  shapeOptions: { color: '#26715b', weight: 2, fillOpacity: 0.08, interactive: false },
+  showArea: false,
+});
 const baseLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom: 19 }).addTo(map);
 L.control.scale({ imperial: true, metric: true }).addTo(map);
 const worker = new Worker(new URL('./raster.worker.js', import.meta.url), { type: 'module' });
 let currentPreview = null;
 let overlay = null;
 let marker = null;
+let selection = null;
 let requestId = 0;
 let activeBounds = [...AREAS['Santa Cruz Mountains']];
 let lockedLimits = null;
@@ -82,6 +91,7 @@ function setBusy(busy, message = '') {
   byId('status').textContent = message;
   byId('cancel').hidden = !busy;
   byId('load').disabled = busy;
+  byId('draw-area').disabled = busy;
   byId('download').disabled = busy || !currentPreview;
 }
 function clearRaster() {
@@ -94,6 +104,10 @@ function clearRaster() {
 }
 function loadBounds(bounds, fit = false) {
   try { validateBounds(bounds); } catch (error) { byId('error').textContent = error.message; byId('error').hidden = false; return; }
+  rectangleDraw.disable();
+  if (!bounds.every((value, index) => value === activeBounds[index])) {
+    selection?.remove(); selection = null;
+  }
   const code = byId('product').value;
   if (fit) map.fitBounds(mapBounds(bounds), { animate: false });
   activeBounds = [...bounds];
@@ -160,6 +174,29 @@ worker.onmessage = ({ data }) => {
 worker.onerror = (event) => { setBusy(false, 'Reader error'); byId('error').textContent = event.message || 'Browser raster worker failed.'; byId('error').hidden = false; };
 byId('menu').onclick = () => sidebar(!document.body.classList.contains('sidebar-open'));
 byId('close-sidebar').onclick = () => sidebar(false);
+function selectCustomBounds(bounds) {
+  byId('area').value = 'Custom bounds';
+  byId('custom-open').hidden = false;
+  ['west', 'south', 'east', 'north'].forEach((id, index) => { byId(id).value = String(bounds[index]); });
+}
+byId('draw-area').onclick = () => {
+  if (rectangleDraw.enabled()) rectangleDraw.disable();
+  else rectangleDraw.enable();
+};
+map.on('draw:drawstart draw:drawstop', ({ type }) => {
+  const active = type === 'draw:drawstart';
+  byId('draw-area').setAttribute('aria-pressed', String(active));
+  byId('draw-area').title = active ? 'Cancel drawing' : 'Draw area';
+});
+map.on('draw:created', ({ layer }) => {
+  const rectangle = layer.getBounds();
+  const bounds = [rectangle.getWest(), rectangle.getSouth(), rectangle.getEast(), rectangle.getNorth()];
+  try { validateBounds(bounds); } catch (error) { byId('error').textContent = error.message; byId('error').hidden = false; return; }
+  selectCustomBounds(bounds);
+  loadBounds(bounds);
+  selection?.remove();
+  selection = layer.addTo(map);
+});
 byId('product').onchange = () => { lockedLimits = null; loadBounds(activeBounds); };
 byId('edge').onchange = () => loadBounds(activeBounds);
 byId('area').onchange = () => {
@@ -177,8 +214,9 @@ byId('custom-form').onsubmit = (event) => {
 };
 byId('load').onclick = () => {
   const bounds = map.getBounds();
-  loadBounds([Math.max(-126, bounds.getWest()), Math.max(31, bounds.getSouth()), Math.min(-113, bounds.getEast()), Math.min(43, bounds.getNorth())]);
-  byId('area').value = 'Custom bounds'; byId('custom-open').hidden = false;
+  const selectedBounds = [Math.max(-126, bounds.getWest()), Math.max(31, bounds.getSouth()), Math.min(-113, bounds.getEast()), Math.min(43, bounds.getNorth())];
+  selectCustomBounds(selectedBounds);
+  loadBounds(selectedBounds);
 };
 byId('reset').onclick = () => loadBounds(AREAS[byId('area').value] || activeBounds, true);
 byId('cancel').onclick = () => { worker.postMessage({ type: 'cancel' }); setBusy(false, 'Cancelling read'); };
@@ -197,7 +235,7 @@ byId('download').onclick = async () => {
   finally { byId('download').disabled = !currentPreview; }
 };
 map.on('click', ({ latlng }) => {
-  if (!currentPreview) return;
+  if (rectangleDraw.enabled() || !currentPreview) return;
   const [nativeX, nativeY] = proj4('EPSG:4326', 'EPSG:3857', [latlng.lng, latlng.lat]);
   const [left, bottom, right, top] = currentPreview.mercatorBounds;
   const column = Math.floor((nativeX - left) / (right - left) * currentPreview.width);

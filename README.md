@@ -31,6 +31,16 @@ npm run preview
 The GitHub Actions workflow tests, builds, and deploys `main` to GitHub Pages.
 The repository Pages source is configured as **GitHub Actions**.
 
+## Draw Area
+
+Select the dashed-rectangle **Draw area** tool in the map toolbar, then drag
+between two corners of the desired region. Completing the rectangle loads its
+pixels automatically and synchronizes the custom geographic bounds. The selected
+boundary remains on the map. The existing native-read limits still apply.
+
+Press Escape or select the tool again to cancel without replacing the preview.
+Mouse and touch drawing are supported; normal map navigation resumes afterward.
+
 ## Data Interpretation
 
 Elevation, canopy height, height percentiles, and height standard deviation
