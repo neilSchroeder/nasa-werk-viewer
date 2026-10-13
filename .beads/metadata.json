@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "nasa_werk_viewer",
+  "project_id": "73869336-114b-424e-b91d-46b2a9863176"
+}
