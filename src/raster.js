@@ -55,6 +55,42 @@ export function cleanValue(value, code, nodata = null) {
   return value;
 }
 
+function isMissingSourceValue(value, nodata) {
+  return !Number.isFinite(value) || (nodata !== null && value === nodata)
+    || Math.abs(value + 9999) <= 0.05;
+}
+
+export function maskChmFill(chmValues, dtmValues, dsmValues, dtmNodata = null, dsmNodata = null) {
+  if (chmValues.length !== dtmValues.length || chmValues.length !== dsmValues.length) {
+    throw new Error('CHM and source terrain windows must have matching dimensions.');
+  }
+  const values = new Float32Array(chmValues);
+  for (let index = 0; index < values.length; index += 1) {
+    if (isMissingSourceValue(dtmValues[index], dtmNodata)
+        || isMissingSourceValue(dsmValues[index], dsmNodata)) values[index] = NaN;
+  }
+  return values;
+}
+
+async function readAlignedSourceWindow(code, referenceImage, window, width, height, signal) {
+  const tiff = await fromUrl(sourceUrl(code), { allowFullFile: false, blockSize: 65536, cacheSize: 20 }, signal);
+  try {
+    const image = await tiff.getImage(0);
+    const sameOrigin = image.getOrigin().every((value, index) => value === referenceImage.getOrigin()[index]);
+    const sameResolution = image.getResolution().every((value, index) => value === referenceImage.getResolution()[index]);
+    if (image.getGeoKeys().ProjectedCSTypeGeoKey !== referenceImage.getGeoKeys().ProjectedCSTypeGeoKey
+        || image.getWidth() !== referenceImage.getWidth() || image.getHeight() !== referenceImage.getHeight()
+        || !sameOrigin || !sameResolution) {
+      throw new Error(`Cannot validate canopy fill: the ${code.toUpperCase()} source grid does not match CHM.`);
+    }
+    const values = await image.readRasters({ window, width, height, samples: [0], interleave: true,
+      resampleMethod: 'nearest', signal });
+    return { values, nodata: image.getGDALNoData() };
+  } finally {
+    await tiff.close();
+  }
+}
+
 export function projectedBounds(bounds, projection = geographicToNative) {
   const [west, south, east, north] = bounds;
   const points = [];
@@ -106,6 +142,10 @@ export async function exportPreview(preview) {
       source_resolution: '30 m', source_crs: 'EPSG:3310',
       processing: 'Nearest-neighbor resampled Web Mercator preview; not a native 30 m analysis export',
       source_overviews: !preview.native, fill_mask: '-9999 +/- 0.05',
+      chm_source_validity_mask: preview.chmSourceValidityMask
+        ? 'Mask where aligned DTM or DSM is non-finite, declared nodata, or within 0.05 of -9999'
+        : null,
+      chm_validity_sources: preview.chmValiditySources ?? [],
       minimum_valid_value: preview.code === 'chm' ? 0 : null }),
   });
 }
@@ -145,9 +185,15 @@ export async function readPreview({ code, bounds, edge = 768, signal, nativeBudg
     const sourceWidth = Math.max(1, Math.round(windowWidth * scale));
     const sourceHeight = Math.max(1, Math.round(windowHeight * scale));
     onProgress(code === 'chm' ? 'Reading native 30 m canopy pixels' : 'Reading raster window');
-    const samples = await image.readRasters({ window, width: sourceWidth, height: sourceHeight,
+    let samples = await image.readRasters({ window, width: sourceWidth, height: sourceHeight,
       samples: [0], interleave: true, resampleMethod: 'nearest', signal });
     const nodata = referenceImage.getGDALNoData();
+    if (code === 'chm') {
+      onProgress('Checking canopy source validity');
+      const dtm = await readAlignedSourceWindow('dtm', referenceImage, window, sourceWidth, sourceHeight, signal);
+      const dsm = await readAlignedSourceWindow('dsm', referenceImage, window, sourceWidth, sourceHeight, signal);
+      samples = maskChmFill(samples, dtm.values, dsm.values, dtm.nodata, dsm.nodata);
+    }
     const [originX, originY] = origin;
     const [resolutionX, resolutionY] = resolution;
     const westX = originX + window[0] * resolutionX;
@@ -175,7 +221,9 @@ export async function readPreview({ code, bounds, edge = 768, signal, nativeBudg
       }
     }
     return { values, width, height, bounds, mercatorBounds, code, source: sourceUrl(code),
-      native: code === 'chm', stats: statistics(values) };
+      native: code === 'chm', chmSourceValidityMask: code === 'chm',
+      chmValiditySources: code === 'chm' ? ['dtm', 'dsm'] : [],
+      stats: statistics(values) };
   } finally {
     await tiff.close();
   }

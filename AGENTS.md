@@ -2,6 +2,8 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
+For work involving WERK raster meaning, units, source quality, masking, resampling, or scientific interpretation, start at [docs/werk-data/README.md](docs/werk-data/README.md) and read its topic pages relevant to the change.
+
 ## Quick Reference
 
 ```bash

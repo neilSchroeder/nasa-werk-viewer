@@ -52,6 +52,8 @@ The [complete variable dictionary](docs/variable-units.md) cites the publisher's
 examples and includes independent cover-scale checks. Units do not resolve the
 still-undocumented vertical datum, aspect convention, cover denominator, or
 statistical estimators. Do not treat the mosaic as observations from one date.
+See the [agent-facing WERK data guide](docs/werk-data/README.md) for
+product interpretation, source defects, current viewer masks, and use guidance.
 
 Source fill values within 0.05 of -9999 are masked. Negative canopy heights are
 missing rather than clipped to zero; other signed variables retain negative
@@ -66,6 +68,14 @@ image 0, the native 30 m raster, and nearest-neighbor sampling. Other products
 use source overview levels when appropriate. The browser inherits overview
 georeferencing from the native image.
 
+Statewide DTM and DSM do not declare nodata in their inspected headers. Since
+the publisher defines CHM as DSM minus DTM, coincident `-9999` fill can appear
+as a false CHM value of zero. CHM reads therefore fetch aligned DTM and DSM
+windows and mask pixels where either source is non-finite, declared nodata, or
+within 0.05 of `-9999`. Genuine zero-height cells remain valid. If the source
+grids do not match or a companion read fails, the canopy preview fails visibly
+instead of showing unverified zeros.
+
 Native reads are limited to 12 million source pixels on desktop and 3 million
 on narrow screens to bound browser memory and download volume. A wide canopy
 request shows the basemap with an error instead of using the corrupted
@@ -79,7 +89,8 @@ in a Web Worker.
 Downloads contain the displayed, nearest-neighbor-resampled Float32 values
 in EPSG:3857 with NaN nodata and JSON provenance in the TIFF description.
 They are **not native 30 m analysis exports**. Projection, source URL, units,
-and masking policy are included. The original NASA rasters remain unchanged.
+and masking policy, including the CHM companion-source validity mask, are
+included. The original NASA rasters remain unchanged.
 
 ## Python Original
 

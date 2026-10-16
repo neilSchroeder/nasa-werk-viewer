@@ -85,6 +85,32 @@ class Preview:
     source_nodata: float | None
     minimum_valid_value: float | None = None
     use_source_overviews: bool = True
+    chm_source_validity_mask: bool = False
+    chm_validity_sources: tuple[str, str] | None = None
+
+
+def mask_chm_fill(
+    chm: np.ndarray,
+    dtm: np.ndarray,
+    dsm: np.ndarray,
+    dtm_nodata: float | None,
+    dsm_nodata: float | None,
+) -> np.ndarray:
+    """Mask CHM cells where either aligned input is missing or contains fill."""
+    if chm.shape != dtm.shape or chm.shape != dsm.shape:
+        raise ValueError("CHM and source terrain windows must have matching dimensions.")
+
+    def missing(values: np.ndarray, nodata: float | None) -> np.ndarray:
+        result = ~np.isfinite(values) | np.isclose(
+            values, SOURCE_FILL_VALUE, rtol=0.0, atol=SOURCE_FILL_TOLERANCE
+        )
+        if nodata is not None:
+            result |= np.isnan(values) if np.isnan(nodata) else values == nodata
+        return result
+
+    result = chm.copy()
+    result[missing(dtm, dtm_nodata) | missing(dsm, dsm_nodata)] = np.nan
+    return result
 
 
 def validate_bounds(bounds: tuple[float, float, float, float]) -> None:
@@ -110,11 +136,14 @@ def read_preview(
     max_edge: int = 768,
     minimum_valid_value: float | None = None,
     use_source_overviews: bool = True,
+    validity_sources: tuple[str, str] | None = None,
 ) -> Preview:
     """Read a decimated native-grid window, then warp only that small array."""
     validate_bounds(bounds)
     if not 32 <= max_edge <= MAX_EDGE:
         raise ValueError(f"Preview size must be between 32 and {MAX_EDGE}.")
+    if validity_sources is not None and len(validity_sources) != 2:
+        raise ValueError("CHM validity requires exactly one DTM and one DSM source.")
     destination_bounds = transform_bounds("EPSG:4326", "EPSG:3857", *bounds)
     with (
         rasterio.Env(
@@ -162,6 +191,39 @@ def read_preview(
         native[
             np.isclose(native, SOURCE_FILL_VALUE, rtol=0.0, atol=SOURCE_FILL_TOLERANCE)
         ] = np.nan
+        if validity_sources is not None:
+            for validity_source in validity_sources:
+                with rasterio.open(validity_source) as validity_dataset:
+                    if (
+                        validity_dataset.crs != dataset.crs
+                        or validity_dataset.width != dataset.width
+                        or validity_dataset.height != dataset.height
+                        or validity_dataset.transform != dataset.transform
+                    ):
+                        raise ValueError(
+                            "Cannot validate canopy fill: DTM and DSM grids must match CHM."
+                        )
+                    if validity_dataset.count < 1:
+                        raise ValueError(
+                            f"Cannot validate canopy fill: {validity_source} has no raster bands."
+                        )
+                    validity_values = validity_dataset.read(
+                        1,
+                        window=window,
+                        out_shape=shape,
+                        masked=True,
+                        out_dtype="float32",
+                        resampling=Resampling.nearest,
+                    ).filled(np.nan)
+                    if validity_source == validity_sources[0]:
+                        dtm_values = validity_values
+                        dtm_nodata = validity_dataset.nodata
+                    else:
+                        dsm_values = validity_values
+                        dsm_nodata = validity_dataset.nodata
+            native = mask_chm_fill(
+                native, dtm_values, dsm_values, dtm_nodata, dsm_nodata
+            )
         if minimum_valid_value is not None:
             native[native < minimum_valid_value] = np.nan
         native_transform = dataset.window_transform(window) * rasterio.Affine.scale(
@@ -194,6 +256,8 @@ def read_preview(
             dataset.nodata,
             minimum_valid_value,
             use_source_overviews,
+            validity_sources is not None,
+            validity_sources,
         )
 
 
@@ -229,6 +293,14 @@ def export_preview(preview: Preview, label: str) -> bytes:
                 source_overviews=str(preview.use_source_overviews),
                 product="Resampled display preview; not a native 30 m analysis export",
             )
+            if preview.chm_source_validity_mask:
+                dataset.update_tags(
+                    chm_source_validity_mask=(
+                        "Aligned DTM or DSM is non-finite, declared nodata, "
+                        "or within 0.05 of -9999"
+                    ),
+                    chm_validity_sources=",".join(preview.chm_validity_sources or ()),
+                )
         return memory.read()
 
 
@@ -407,6 +479,9 @@ def main() -> None:
                 max_edge,
                 minimum_valid_value=0.0 if code == "chm" else None,
                 use_source_overviews=code != "chm",
+                validity_sources=(
+                    (layer_url("dtm"), layer_url("dsm")) if code == "chm" else None
+                ),
             )
             rgba, color_map, normalization, ticks = colorize(
                 preview.values,
@@ -504,14 +579,14 @@ def main() -> None:
         )
         if preview.minimum_valid_value is not None:
             st.write(
-                "Negative canopy heights are masked as invalid, not replaced with zero. Zero heights remain valid; other layers retain negative values."
+                "Negative canopy heights and cells where aligned DTM or DSM inputs contain nodata/fill are masked. Zero heights remain valid when both inputs are valid."
             )
         if not preview.use_source_overviews:
             st.write(
                 "Canopy previews bypass artifact-contaminated source overviews and sample the native 30 m raster. Large extents are limited to avoid bulk downloads."
             )
         st.write(
-            "Units, vertical datum, and cover scaling are not inferred when source metadata is absent."
+            "Unit labels follow publisher examples. Vertical datum, aspect convention, cover denominator, and height-statistic conventions remain undocumented."
         )
         st.write(
             f"Source fill values within {SOURCE_FILL_TOLERANCE} of -9999 are masked before reprojection, statistics, and export."
@@ -528,6 +603,87 @@ def self_check() -> None:
 
     bounds = (-122.2, 37.0, -122.0, 37.2)
     native_bounds = transform_bounds("EPSG:4326", "EPSG:3310", *bounds)
+    chm_test = mask_chm_fill(
+        np.array([[0, 0, 0, 3]], dtype="float32"),
+        np.array([[5, -9999, 5, 5]], dtype="float32"),
+        np.array([[5, -9999, -9999.02, 8]], dtype="float32"),
+        None,
+        None,
+    )
+    assert chm_test[0, 0] == 0
+    assert np.isnan(chm_test[0, 1:3]).all()
+    assert chm_test[0, 3] == 3
+    try:
+        mask_chm_fill(
+            np.zeros((1, 1), dtype="float32"),
+            np.zeros((1, 2), dtype="float32"),
+            np.zeros((1, 1), dtype="float32"),
+            None,
+            None,
+        )
+    except ValueError as error:
+        assert "matching dimensions" in str(error)
+    else:
+        raise AssertionError("Mismatched CHM source arrays were accepted")
+
+    chm_values = np.zeros((100, 100), dtype="float32")
+    dtm_values = np.full((100, 100), 5, dtype="float32")
+    dsm_values = np.full((100, 100), 5, dtype="float32")
+    dtm_values[:40, :40] = SOURCE_FILL_VALUE
+    dsm_values[:40, :40] = SOURCE_FILL_VALUE
+    with MemoryFile() as chm_memory, MemoryFile() as dtm_memory, MemoryFile() as dsm_memory:
+        for memory, values in (
+            (chm_memory, chm_values),
+            (dtm_memory, dtm_values),
+            (dsm_memory, dsm_values),
+        ):
+            with memory.open(
+                driver="GTiff",
+                width=100,
+                height=100,
+                count=1,
+                dtype="float32",
+                crs="EPSG:3310",
+                transform=from_bounds(*native_bounds, 100, 100),
+            ) as dataset:
+                dataset.write(values, 1)
+        chm_preview = read_preview(
+            chm_memory.name,
+            bounds,
+            max_edge=64,
+            minimum_valid_value=0.0,
+            use_source_overviews=False,
+            validity_sources=(dtm_memory.name, dsm_memory.name),
+        )
+        with MemoryFile() as shifted_dsm_memory:
+            with shifted_dsm_memory.open(
+                driver="GTiff",
+                width=100,
+                height=100,
+                count=1,
+                dtype="float32",
+                crs="EPSG:3310",
+                transform=from_bounds(*native_bounds, 100, 100)
+                * rasterio.Affine.translation(1, 0),
+            ) as dataset:
+                dataset.write(dsm_values, 1)
+            try:
+                read_preview(
+                    chm_memory.name,
+                    bounds,
+                    max_edge=64,
+                    minimum_valid_value=0.0,
+                    use_source_overviews=False,
+                    validity_sources=(dtm_memory.name, shifted_dsm_memory.name),
+                )
+            except ValueError as error:
+                assert "grids must match" in str(error)
+            else:
+                raise AssertionError("A misaligned CHM validity source was accepted")
+    assert chm_preview.chm_source_validity_mask
+    assert np.isnan(chm_preview.values).any()
+    assert np.any(chm_preview.values == 0)
+
     values = np.full((100, 100), 42, dtype="float32")
     values[:40, :40] = SOURCE_FILL_VALUE
     values[20:40, :40] += np.linspace(-0.02, 0.02, 40, dtype="float32")
@@ -628,6 +784,15 @@ def self_check() -> None:
     ):
         assert dataset.tags()["minimum_valid_value"] == "0.0"
         assert np.array_equal(dataset.read(1), canopy.values, equal_nan=True)
+    with (
+        MemoryFile(export_preview(chm_preview, "Synthetic CHM check")) as memory,
+        memory.open() as dataset,
+    ):
+        assert "DTM or DSM" in dataset.tags()["chm_source_validity_mask"]
+        assert dataset.tags()["chm_validity_sources"] == ",".join(
+            (dtm_memory.name, dsm_memory.name)
+        )
+        assert np.array_equal(dataset.read(1), chm_preview.values, equal_nan=True)
     print(
         "PASS: bounded read, nodata, reprojection, export, color mapping, years, and input validation"
     )
@@ -641,6 +806,7 @@ def probe() -> None:
         256,
         minimum_valid_value=0.0,
         use_source_overviews=False,
+        validity_sources=(layer_url("dtm"), layer_url("dsm")),
     )
     finite = preview.values[np.isfinite(preview.values)]
     assert finite.size > 0, "Live WERK preview has no finite pixels"

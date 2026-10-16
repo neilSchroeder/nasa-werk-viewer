@@ -32,8 +32,8 @@ document.querySelector('#app').innerHTML = `
       </section>
       <details class="quality"><summary>Source and quality</summary>
         <p>NASA WERK / SDSC. Data license: CC0-1.0.</p>
-        <p>Fill values near -9999 are missing. Negative canopy heights are masked. Positive source outliers remain.</p>
-        <p>Canopy previews use native pixels, bypassing corrupted overviews. Wide requests are limited by browser memory.</p>
+        <p>Fill values near -9999 are missing. Negative canopy heights are masked. CHM cells with missing DTM or DSM source values are also masked; genuine zero-height cells remain. Positive source outliers remain.</p>
+        <p>Canopy previews use native pixels and read aligned DTM/DSM windows to check missingness, bypassing corrupted overviews. Wide requests are limited by browser memory.</p>
         <p>Units follow the publisher's examples. Vertical datum, aspect direction, and statistical conventions remain undocumented.</p>
         <p>Survey dates vary by campaign. Acquisition year is not a time series.</p>
         <a href="${BASE_URL}/README" target="_blank" rel="noopener">Publisher README <i data-lucide="external-link"></i></a>

@@ -2,6 +2,8 @@
 
 Research date: 2026-10-02. Scope: primary-source metadata inspection and one 16-byte raster request; no full raster downloads, pixel analysis, or pipeline implementation.
 
+> **Historical snapshot:** this records the initial investigation, not the latest evidence. Later work confirmed intended unit labels and cover percentage-point encoding, and identified product-specific nodata and grid issues. Use the [WERK data guide](werk-data/README.md) and [2026-10-13 primary-source review](werk-data/source-review.md) for current evidence and remaining unknowns.
+
 ## Recommendation
 
 Start remote-first with the existing Cloud-Optimized GeoTIFFs (COGs). We should make a small, trustworthy catalog and a useful subset workflow before copying statewide data or converting everything to Zarr. The publisher identifies all rasters as COGs, and the sampled 30 m DTM serves HTTP range requests. This supports the access approach, but does not establish performance or COG conformance for every asset. [README][readme] [DTM asset][dtm-asset]
@@ -56,8 +58,8 @@ The following is recommended work, not functionality demonstrated in this assess
 ### Scientific and metadata gates
 
 - **Known artifacts:** the publisher reports unclassified high points propagating into DSM/CHM, plus water/low-return voids causing unrealistic DTM interpolation. Add documented quality flags and optional analysis masks. Do not silently delete legitimate tall trees, buildings, or terrain extremes. Artifact locations and thresholds were not measured here. [README][readme]
-- **Cover semantics:** `all` versus `first` refers to lidar return populations, not interchangeable vegetation classes. The README calls the six measures percentages and defines normalized-height thresholds above 2 m, between 2 and 4 m, and between 4 and 8 m. Verify the stored 0-1 versus 0-100 scale and exact boundary/denominator conventions before labeling or normalizing values. [README][readme]
-- **Open questions:** vertical datum and elevation/height units, slope units, aspect units/orientation and flat-cell encoding, nodata semantics, resolution derivation, and campaign overlap selection policy remain unresolved from the inspected sources. Ask the publisher before making scientific harmonization claims; the README provides support contacts. [README][readme] [Sample item][dtm-item]
+- **Cover semantics:** the publisher-linked visualization notebook labels cover in percent, and bounded samples support percentage-point encoding at 10 m and 30 m. The denominator, exact threshold boundaries, and return/class filters remain unresolved. [README][readme]
+- **Open questions:** vertical datum, aspect orientation and flat-cell encoding, cover denominator, height-statistic input reference and estimators, full product-specific nodata behavior, grid split rationale, and campaign overlap policy remain unresolved. The 2026-10-13 review found that inspected DTM/DSM/CHM headers omit nodata and that some CHM fill intersections appear as zero; do not infer a universal CHM zero mask from that sample. [README][readme] [Source review](werk-data/source-review.md)
 - **Variable-aware resampling:** once units are confirmed, handle aspect circularly; use nearest-neighbor for acquisition year and categorical identifiers. Choose continuous-variable methods for the actual analysis. Never describe resampled cell-level height percentiles as percentiles recomputed from pooled lidar returns. These are methodological recommendations, not verified publisher processing choices.
 - **Consistency and corrections:** test bounds/grid alignment and year-raster alignment, then check valid coverage rather than rectangular extents. Audit catalog links and source validators for updates; retain old manifests and separate source fixes from our own derived processing.
 

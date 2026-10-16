@@ -2,6 +2,11 @@
 
 Research date: 2026-10-03. Dataset: <https://scil-data.sdsc.edu/data/nasa-werk/>.
 
+For agent-facing interpretation, cleaning, and quality caveats, see the
+[NASA WERK data guide](werk-data/README.md). The newer
+[primary-source review](werk-data/source-review.md) records findings from
+2026-10-13 that are not included in this earlier unit investigation.
+
 The publisher-endorsed statewide visualization notebook explicitly labels elevation and height statistics in metres, slope and aspect in degrees, and all six canopy-cover products in percent. This is direct publisher evidence, not an inference from EPSG:3310. Skewness and kurtosis are dimensionless by their statistical definitions; the notebook leaves their unit strings empty. Acquisition year is the year of LiDAR collection. [S1][S2][S5]
 
 **Evidence scope:** the unit configuration targets the **30 m** rasters. The README lists the same science variables for both 10 m and 30 m products, supporting the same intended interpretation at 10 m, but it does not independently certify their encoding. The separate fire notebook explicitly labels **1 m CHM** in metres for its four LA example tiles. Do not extend that verification to every campaign or every 1 m band without checking the source metadata. [S1][S2][S3]
